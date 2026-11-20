@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp 自动调查</title>
+<style>
+  :root {
+    --bg: #f4f5f2; --card: #ffffff; --ink: #1b1f1d; --muted: #6b736f; --line: #e3e6e1;
+    --accent: #0b7a5a; --accent-ink: #ffffff; --ok: #0b7a5a; --bad: #b3261e; --warn-bg: #fff4d6; --warn-ink: #6b4e00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121513; --card: #1b1f1d; --ink: #e9ece9; --muted: #98a19c; --line: #2c322f;
+      --accent: #35c492; --accent-ink: #06231a; --ok: #35c492; --bad: #ff8a80; --warn-bg: #3a3014; --warn-ink: #f1d789;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  p.lead { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .label { flex: 1; min-width: 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+  .dot.on { background: var(--ok); }
+  .sub { color: var(--muted); font-size: 13px; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], input[type=search] { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .login { margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-ink); }
+  .login a { color: inherit; font-weight: 600; word-break: break-all; }
+  .login .code { display: flex; gap: 8px; margin-top: 10px; }
+  .login pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; margin: 10px 0 0; opacity: .8; }
+  .groups { margin-top: 12px; }
+  label.group { display: flex; align-items: center; gap: 12px; padding: 9px 4px; cursor: pointer; }
+  label.group + label.group { border-top: 1px solid var(--line); }
+  label.group input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+  label.group .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  label.group.on .name { font-weight: 600; }
+  .count { color: var(--muted); font-weight: 400; }
+  .empty, .error { color: var(--muted); padding: 12px 4px; }
+  .error { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>WhatsApp 自动调查</h1>
+  <p class="lead">有人在勾选的群里 tag 你,Claude 会自动调查并回复到群里。</p>
+
+  <section>
+    <h2>连线状态</h2>
+    <div class="row">
+      <span class="dot" id="wa-dot"></span>
+      <div class="label">WhatsApp<div class="sub" id="wa-text">读取中…</div></div>
+    </div>
+    <div class="row">
+      <span class="dot" id="claude-dot"></span>
+      <div class="label">Claude<div class="sub" id="claude-text">读取中…</div></div>
+      <button id="login-btn" hidden>登入 Claude</button>
+    </div>
+    <div class="login" id="login-box" hidden>
+      <div id="login-step"></div>
+      <div class="code">
+        <input type="text" id="login-code" placeholder="授权页面给你的代码" autocomplete="off">
+        <button id="login-send">送出</button>
+      </div>
+      <pre id="login-out"></pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>监听的群 <span class="count" id="count"></span></h2>
+    <div class="sub">勾选的群:讯息存在这台电脑,有人 tag 你会自动回复。没勾的群完全不读、不存。改动对之后的新讯息立即生效。</div>
+    <div class="groups">
+      <input type="search" id="filter" placeholder="搜寻群名">
+      <div id="list"><div class="empty">读取中…</div></div>
+    </div>
+  </section>
+  <div class="error" id="error" hidden></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let groups = [];
+
+async function post(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error((await res.text()) || res.status);
+}
+
+function renderGroups() {
+  const q = $('filter').value.trim().toLowerCase();
+  const shown = groups.filter(g => g.name.toLowerCase().includes(q));
+  $('count').textContent = `· 已勾 ${groups.filter(g => g.allowed).length} / 共 ${groups.length}`;
+  const list = $('list');
+  list.textContent = '';
+  if (!shown.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = groups.length ? '没有符合的群' : '还没读到群清单';
+    list.append(empty);
+    return;
+  }
+  for (const g of shown) {
+    const label = document.createElement('label');
+    label.className = 'group' + (g.allowed ? ' on' : '');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = g.allowed;
+    box.onchange = async () => {
+      box.disabled = true;
+      try {
+        await post('/api/groups', { jid: g.jid, allowed: box.checked });
+        g.allowed = box.checked;
+      } catch (e) {
+        box.checked = g.allowed;
+        showError('没改成:' + e.message);
+      }
+      renderGroups();
+    };
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = g.name || g.jid;
+    label.append(box, name);
+    list.append(label);
+  }
+}
+
+function showError(text) {
+  $('error').textContent = text;
+  $('error').hidden = !text;
+}
+
+async function refresh() {
+  let s;
+  try {
+    s = await (await fetch('/api/state')).json();
+    showError('');
+  } catch (e) {
+    showError('连不上 bridge(它可能没在跑):' + e.message);
+    return;
+  }
+
+  const waOn = s.whatsapp.connected && s.whatsapp.loggedIn;
+  $('wa-dot').classList.toggle('on', waOn);
+  $('wa-text').textContent = waOn ? '已连线' : s.whatsapp.loggedIn ? '断线中,会自动重连' : '已登出,要在终端机重新扫 QR 码(见 README)';
+
+  const c = s.claude;
+  $('claude-dot').classList.toggle('on', c.loggedIn);
+  $('claude-text').textContent = !c.configured ? '没有启用自动调查(只收讯息)'
+    : c.loggedIn ? `已登入${c.subscription ? '(' + c.subscription + ' 订阅)' : ''}` : '未登入:有人 tag 你时会调查失败';
+  $('login-btn').hidden = !c.configured || s.login.running;
+  $('login-btn').textContent = c.loggedIn ? '重新登入' : '登入 Claude';
+
+  $('login-box').hidden = !s.login.running;
+  if (s.login.running) {
+    const step = $('login-step');
+    step.textContent = '';
+    if (s.login.url) {
+      const a = document.createElement('a');
+      a.href = s.login.url; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = '打开 Claude 授权页面';
+      step.append('1. ', a, '(浏览器应该已经自动打开)。 2. 授权后如果页面给你一段代码,贴到下面送出。');
+    } else {
+      step.textContent = '正在启动登入…';
+    }
+    $('login-out').textContent = '';
+  }
+
+  // don't redraw the list under the user's cursor while they are filtering or clicking
+  if (document.activeElement !== $('filter') || !groups.length) {
+    groups = s.groups;
+    renderGroups();
+  }
+}
+
+$('filter').oninput = renderGroups;
+$('login-btn').onclick = async () => {
+  try { await post('/api/claude/login', {}); } catch (e) { showError('登入没启动:' + e.message); }
+  refresh();
+};
+$('login-send').onclick = async () => {
+  const code = $('login-code').value.trim();
+  if (!code) return;
+  try { await post('/api/claude/code', { code }); $('login-code').value = ''; } catch (e) { showError('代码没送出:' + e.message); }
+  refresh();
+};
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

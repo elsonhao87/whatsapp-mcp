@@ -1,0 +1,10 @@
+{
+  "claude_bin": "",
+  "triage_dir": "",
+  "memory_index": "",
+  "live_log_via_chrome": false,
+  "answer_all_questions": false,
+  "allowed_tools": "",
+  "denied_tools": "",
+  "live_log_console_url": ""
+}

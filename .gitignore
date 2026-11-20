@@ -1,3 +1,8 @@
+# machine-specific: WhatsApp session + messages, which groups, local paths, built binary
+whatsapp-bridge/store/
+whatsapp-bridge/allowed_chats.txt
+whatsapp-bridge/whatsapp-bridge
+whatsapp-bridge/whatsapp-bridge.exe
+config.json
 *.db
-claude_desktop_config.json
-whatsapp.log
+TRIAGE.local.md
