@@ -754,13 +754,8 @@ func extractDirectPathFromURL(url string) string {
 		return url // Return original URL if parsing fails
 	}
 
-	pathPart := parts[1]
-
-	// Remove query parameters
-	pathPart = strings.SplitN(pathPart, "?", 2)[0]
-
-	// Create proper direct path format
-	return "/" + pathPart
+	// Keep the query string: the CDN rejects the download (403) without its oh/oe signature.
+	return "/" + parts[1]
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
