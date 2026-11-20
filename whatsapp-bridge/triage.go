@@ -193,13 +193,14 @@ const answerAllHint = `
 // liveLogHint is added to the first pass when live_log_via_chrome is on.
 const liveLogHint = `
 
-## 需要 live 日志时
+## 需要 live 日志或 Bitbucket 的 PR 时
 
-live 的 ClickHouse 日志你这一轮查不到(MCP 不开放)。如果**必须**看 live 日志才答得出来
-(例如 live 上某笔单 / 某个 API 当时回了什么错),就不要写回复段,改成在输出最后加这一行:
+这两样你这一轮查不到。如果**必须**看 live 日志才答得出来(例如 live 上某笔单 / 某个 API 当时回了什么错),
+或对方在要某个 PR / 问 PR 开了没、合了没,就不要写回复段,改成在输出最后加这一行:
 
 ` + liveLogMarker + `
-<要查什么:哪个 app、哪个时间范围、用什么条件找(单号 / request_id / 关键字)>
+<要查什么。日志:哪个 app、哪个时间范围、用什么条件找(单号 / request_id / 关键字)。
+ PR:哪个 repo、哪个分支或单号、要合去哪个分支>
 
 bridge 看到这行会开第二轮去查。代码或 DB 已经答得出来的,不要用这一行。`
 
