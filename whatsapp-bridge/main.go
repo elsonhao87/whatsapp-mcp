@@ -221,20 +221,45 @@ func loadAllowedChats(path string) {
 	fmt.Printf("Loaded %d allowed chat(s) from %s\n", len(allowedChats), path)
 }
 
+// contextInfo returns the reply/mention metadata of a message (nil-safe when absent).
+func contextInfo(msg *waProto.Message) *waProto.ContextInfo {
+	switch {
+	case msg.GetExtendedTextMessage() != nil:
+		return msg.GetExtendedTextMessage().GetContextInfo()
+	case msg.GetImageMessage() != nil:
+		return msg.GetImageMessage().GetContextInfo()
+	case msg.GetVideoMessage() != nil:
+		return msg.GetVideoMessage().GetContextInfo()
+	case msg.GetDocumentMessage() != nil:
+		return msg.GetDocumentMessage().GetContextInfo()
+	}
+	return nil
+}
+
+// withQuote appends the message being replied to, so whoever reads the stored
+// conversation later knows what a bare "help update" refers to.
+func withQuote(content string, msg *waProto.Message) string {
+	quoted := contextInfo(msg).GetQuotedMessage()
+	if quoted == nil {
+		return content
+	}
+	text := extractTextContent(quoted)
+	if mediaType, _, _, _, _, _, _ := extractMediaInfo(quoted); mediaType != "" {
+		text = strings.TrimSpace("[" + mediaType + "] " + text)
+	}
+	if text == "" {
+		return content
+	}
+	if r := []rune(text); len(r) > 1000 {
+		text = string(r[:1000]) + "…"
+	}
+	return content + "\n[replying to: " + text + "]"
+}
+
 // mentionsMe reports whether the message is addressed to the logged-in account:
 // it @-mentions it, or it is a reply (quote) to one of its messages.
 func mentionsMe(client *whatsmeow.Client, msg *waProto.Message) bool {
-	var info *waProto.ContextInfo
-	switch {
-	case msg.GetExtendedTextMessage() != nil:
-		info = msg.GetExtendedTextMessage().GetContextInfo()
-	case msg.GetImageMessage() != nil:
-		info = msg.GetImageMessage().GetContextInfo()
-	case msg.GetVideoMessage() != nil:
-		info = msg.GetVideoMessage().GetContextInfo()
-	case msg.GetDocumentMessage() != nil:
-		info = msg.GetDocumentMessage().GetContextInfo()
-	}
+	info := contextInfo(msg)
 	// GetParticipant = author of the quoted message
 	for _, m := range append(info.GetMentionedJID(), info.GetParticipant()) {
 		// JIDs arrive as phone numbers or as LIDs depending on the group
@@ -507,7 +532,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		chatJID,
 		sender,
 		msg.Info.PushName,
-		content,
+		withQuote(content, msg.Message),
 		msg.Info.Timestamp,
 		msg.Info.IsFromMe,
 		mentioned,
