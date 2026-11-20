@@ -22,6 +22,7 @@
 | `config.json` 的 `answer_all_questions` | 设成 `true`:没 tag 你的讯息也会看(最慢 2 分钟后),是问题才回;不是问题就不回、也不通知你。每条讯息都会叫一次 Claude |
 | `CODE_CHANGE.md` + `whatsapp-bridge/codechange.go` | 改代码的流程,`config.json` 的 `code_change_on_go` 设成 `true` 才启用。有人要求改代码时,bot 只在群里贴提案并 tag 你;**你本人在那个群回 `go`** 才会动手(一小时内有效,一个 go 对应最近一个提案)。Claude 在一份临时副本里改档案(没有 shell、没有 git),bridge 自己 commit 并 push 到提案的分支。只会推 `code_branch_prefix` 开头的分支;`code_push_url` 是 git 网址,`{repo}` 会换成 repo 资料夹名。你自己的工作目录不会被动到,本机分支要自己 pull。`code_staging_branch` 有填的话,推完会再 tag 你问要不要把那个 commit cherry-pick 到这个分支,同样是你回 `go` 才推(有冲突就不推,留给你处理) |
 | `TRIAGE.local.md`(不进 git,可有可无) | 只属于这台机器的补充说明:有哪些 DB MCP、日志表名、系统名称。有这个档就会接在 `TRIAGE.md` 后面 |
+| `config.json` 的 `owner_command_prefix` | 填一个词(例如 `bot`):你本人在监听的群里发「bot 查一下…」,bot 就当成你的指令去做并回你。只认你自己帐号发的;要改代码仍然先出提案、等你回 `go`。留空 = 关闭 |
 | `TRIAGE_LIVE_LOG.md` | 第二轮(用 Chrome 查 live ClickHouse 日志)的说明。只有 `config.json` 的 `live_log_via_chrome` 设成 `true` 才会用到,SQL console 的网址填在 `live_log_console_url`:第一轮说要看 live 日志时,bridge 再跑一轮,这一轮可以操作你的 Chrome(要装 Claude in Chrome 扩充、Chrome 开着、ClickHouse 已登入)。每次用到都会在你自己的 WhatsApp 标「🌐 这次用了 Chrome」和跑过的查询 |
 | `config.json` | 这台机器的设定:`claude_bin`(claude 指令的路径,留空 = 只收讯息不调查)、`triage_dir`(Claude 在哪个 repo 里调查)、`memory_index`(先读的笔记档,可留空)。改了不用重启 |
 | `install.sh` + `launchd/` | macOS:编译并设成开机自动在背景跑 |

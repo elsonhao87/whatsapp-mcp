@@ -529,7 +529,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 				asker = sender
 			}
 			if mentioned {
-				go triage(client, messageStore, chatJID, name, msg.Info.ID, msg.Info.Sender.ToNonAD(), asker, content, false)
+				go triage(client, messageStore, chatJID, name, msg.Info.ID, msg.Info.Sender.ToNonAD(), asker, content, false, false)
 			} else if content != "" && loadConfig().AnswerAllQuestions {
 				// not tagged: the follow-up loop looks at it (and whatever else they send meanwhile) within 2 minutes
 				openThread(chatJID, name, msg.Info.Sender.ToNonAD(), asker, msg.Info.Timestamp)
@@ -537,6 +537,9 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		} else if isGo(content) {
 			// the owner approving the code change proposed in this chat
 			go applyChange(client, messageStore, chatJID)
+		} else if isOwnerCommand(loadConfig(), content) {
+			// the owner asking the bot for something themself
+			go triage(client, messageStore, chatJID, name, msg.Info.ID, ownerJID(client), ownerName, content, false, true)
 		}
 
 		// Log message reception

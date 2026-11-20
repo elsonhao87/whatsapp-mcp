@@ -323,7 +323,7 @@ func registerWebUI(client *whatsmeow.Client, store *MessageStore) {
 		threadsMu.Lock()
 		delete(threads, req.ChatJID+"|"+sender.User) // forget that it was already answered
 		threadsMu.Unlock()
-		go triage(client, store, req.ChatJID, groupNames(client)[req.ChatJID], req.MessageID, sender, name, content, false)
+		go triage(client, store, req.ChatJID, groupNames(client)[req.ChatJID], req.MessageID, sender, name, content, false, false)
 		w.WriteHeader(http.StatusAccepted)
 	})
 

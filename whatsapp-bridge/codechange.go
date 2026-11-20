@@ -143,6 +143,15 @@ func applyChange(client *whatsmeow.Client, store *MessageStore, chatJID string) 
 
 	triageMu.Lock()
 	defer triageMu.Unlock()
+	// whatever the asker wrote while this was waiting for the "go" is answered by this run:
+	// the follow-up loop must not pick it up afterwards and propose the same change again
+	defer func() {
+		threadsMu.Lock()
+		if t := threads[p.chatJID+"|"+p.senderJID.User]; t != nil {
+			t.handledUntil = time.Now()
+		}
+		threadsMu.Unlock()
+	}()
 
 	cfg := loadConfig()
 	if p.cherryPick != "" {
