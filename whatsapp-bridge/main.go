@@ -534,6 +534,9 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 				// not tagged: the follow-up loop looks at it (and whatever else they send meanwhile) within 2 minutes
 				openThread(chatJID, name, msg.Info.Sender.ToNonAD(), asker, msg.Info.Timestamp)
 			}
+		} else if isGo(content) {
+			// the owner approving the code change proposed in this chat
+			go applyChange(client, messageStore, chatJID)
 		}
 
 		// Log message reception

@@ -51,6 +51,11 @@ type config struct {
 	MemoryIndex string `json:"memory_index"` // optional notes file Claude should read first
 	// opt-in: when the first pass says it needs the live logs, run a second pass that may
 	// drive the owner's Chrome (Claude in Chrome extension, signed in to ClickHouse Cloud)
+	// opt-in: when someone asks for a code change, propose it and wait for the owner's "go"
+	// in that chat; then edit in a throwaway worktree, commit and push the branch (codechange.go)
+	CodeChangeOnGo    bool   `json:"code_change_on_go"`
+	CodeBranchPrefix  string `json:"code_branch_prefix"` // only branches starting with this are ever pushed
+	CodePushURL       string `json:"code_push_url"`      // git URL to fetch from and push to; {repo} = the repo folder name
 	LiveLogViaChrome  bool   `json:"live_log_via_chrome"`
 	LiveLogConsoleURL string `json:"live_log_console_url"` // the SQL console that second pass opens
 	// MCP servers / tools Claude may use besides Read, Grep, Glob (comma separated), and
@@ -215,18 +220,31 @@ func joinTools(lists []string) string {
 	return strings.Join(out, ",")
 }
 
-// runClaude runs one headless investigation and returns what Claude printed.
-// chrome = also allow the Claude in Chrome tools (second pass only).
-func runClaude(cfg config, prompt string, chrome bool) (string, error) {
+// claudeRun = what one headless run may do. The zero value is the read-only first pass.
+type claudeRun struct {
+	dir     string // working directory; empty = triage_dir
+	chrome  bool   // also allow the Claude in Chrome tools (second pass only)
+	tools   string // built-in tools; empty = read-only (Read, Grep, Glob)
+	allowed string // extra --allowedTools entries
+}
+
+// runClaude runs Claude headless and returns what it printed.
+func runClaude(cfg config, prompt string, run claudeRun) (string, error) {
 	storeDir, _ := filepath.Abs("store")
 	ctx, cancel := context.WithTimeout(context.Background(), triageTimeout)
 	defer cancel()
-	allowed, denied, chromeFlag := []string{cfg.AllowedTools}, []string{"mcp__whatsapp", cfg.DeniedTools, chromeTools}, "--no-chrome"
-	if chrome {
+	if run.dir == "" {
+		run.dir = cfg.TriageDir
+	}
+	if run.tools == "" {
+		run.tools = triageBuiltinTools
+	}
+	allowed, denied, chromeFlag := []string{cfg.AllowedTools, run.allowed}, []string{"mcp__whatsapp", cfg.DeniedTools, chromeTools}, "--no-chrome"
+	if run.chrome {
 		allowed, denied, chromeFlag = append(allowed, chromeTools), []string{"mcp__whatsapp", cfg.DeniedTools, chromeDeniedTools}, "--chrome"
 	}
 	args := []string{"-p", chromeFlag,
-		"--tools", triageBuiltinTools,
+		"--tools", run.tools,
 		"--disallowedTools", joinTools(denied),
 		"--add-dir", storeDir,
 		"--no-session-persistence",
@@ -235,7 +253,7 @@ func runClaude(cfg config, prompt string, chrome bool) (string, error) {
 		args = append(args, "--allowedTools", list)
 	}
 	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, args...)
-	cmd.Dir = cfg.TriageDir
+	cmd.Dir = run.dir
 	// the prompt goes through stdin so chat text can never be parsed as a CLI flag
 	cmd.Stdin = strings.NewReader(prompt)
 	out, err := cmd.Output()
@@ -302,13 +320,16 @@ func triage(client *whatsmeow.Client, store *MessageStore, chatJID, chatName, ms
 	if cfg.LiveLogViaChrome {
 		firstPass += liveLogHint
 	}
-	out, err := runClaude(cfg, firstPass+chat, false)
+	if cfg.CodeChangeOnGo {
+		firstPass += strings.ReplaceAll(codeChangeHint, "{{code_branch_prefix}}", cfg.CodeBranchPrefix)
+	}
+	out, err := runClaude(cfg, firstPass+chat, claudeRun{})
 	usedChrome := false
 	if err == nil && cfg.LiveLogViaChrome && strings.Contains(out, liveLogMarker) {
 		var liveLog []byte
 		if liveLog, err = os.ReadFile(liveLogInstructions); err == nil {
 			usedChrome = true
-			out, err = runClaude(cfg, base+"\n\n"+fill.Replace(string(liveLog))+chat+"\n## 第一轮的调查结果\n\n"+out, true)
+			out, err = runClaude(cfg, base+"\n\n"+fill.Replace(string(liveLog))+chat+"\n## 第一轮的调查结果\n\n"+out, claudeRun{chrome: true})
 		}
 	}
 	if err != nil {
@@ -320,6 +341,7 @@ func triage(client *whatsmeow.Client, store *MessageStore, chatJID, chatName, ms
 	}
 
 	report, reply, _ := strings.Cut(out, replyMarker)
+	report, proposal, _ := strings.Cut(report, proposalMarker)
 	report, reply = strings.TrimSpace(report), strings.TrimSpace(reply)
 	if reply == "" {
 		if quiet {
@@ -331,7 +353,19 @@ func triage(client *whatsmeow.Client, store *MessageStore, chatJID, chatName, ms
 	}
 	// tag the person who asked
 	tagged := fmt.Sprintf("%s@%s %s", replyPrefix, senderJID.User, reply)
-	if ok, errMsg := sendWhatsAppMessage(client, chatJID, tagged, "", senderJID.String()); !ok {
+	mentions := []string{senderJID.String()}
+	if cfg.CodeChangeOnGo && strings.TrimSpace(proposal) != "" {
+		// a code change was asked for: nothing is changed until the owner answers "go" in this chat
+		if p, err := newProposal(cfg, proposal, chatJID, chatName, sender, senderJID, transcript); err != nil {
+			report += "\n\n⚠️ 改代码的提案不能用:" + err.Error() + "\n" + strings.TrimSpace(proposal)
+		} else {
+			owner := ownerJID(client)
+			tagged += fmt.Sprintf("\n\n@%s 要改代码(%s,分支 %s):\n%s\n回 go 我就改、commit、push;不回就不动。", owner.User, p.repo, p.branch, p.summary)
+			mentions = append(mentions, owner.String())
+			report += "\n\n📝 提案:" + p.repo + " / " + p.branch + "\n" + p.summary
+		}
+	}
+	if ok, errMsg := sendWhatsAppMessage(client, chatJID, tagged, "", mentions...); !ok {
 		tellOwner(client, header+"\n\n"+report+"\n\n⚠️ 回复没发出去:"+errMsg+"\n\n"+reply)
 		return
 	}

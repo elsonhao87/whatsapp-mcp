@@ -6,5 +6,8 @@
   "answer_all_questions": false,
   "allowed_tools": "",
   "denied_tools": "",
-  "live_log_console_url": ""
+  "live_log_console_url": "",
+  "code_change_on_go": false,
+  "code_branch_prefix": "",
+  "code_push_url": ""
 }

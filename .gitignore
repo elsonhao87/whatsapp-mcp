@@ -6,3 +6,4 @@ whatsapp-bridge/whatsapp-bridge.exe
 config.json
 *.db
 TRIAGE.local.md
+worktrees/
