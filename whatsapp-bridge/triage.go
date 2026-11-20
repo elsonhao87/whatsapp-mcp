@@ -53,9 +53,11 @@ type config struct {
 	// drive the owner's Chrome (Claude in Chrome extension, signed in to ClickHouse Cloud)
 	// opt-in: when someone asks for a code change, propose it and wait for the owner's "go"
 	// in that chat; then edit in a throwaway worktree, commit and push the branch (codechange.go)
-	CodeChangeOnGo    bool   `json:"code_change_on_go"`
-	CodeBranchPrefix  string `json:"code_branch_prefix"` // only branches starting with this are ever pushed
-	CodePushURL       string `json:"code_push_url"`      // git URL to fetch from and push to; {repo} = the repo folder name
+	CodeChangeOnGo   bool   `json:"code_change_on_go"`
+	CodeBranchPrefix string `json:"code_branch_prefix"` // only branches starting with this are ever pushed
+	CodePushURL      string `json:"code_push_url"`      // git URL to fetch from and push to; {repo} = the repo folder name
+	// optional: after a change is pushed, offer to cherry-pick that commit onto this branch (again on "go")
+	CodeStagingBranch string `json:"code_staging_branch"`
 	LiveLogViaChrome  bool   `json:"live_log_via_chrome"`
 	LiveLogConsoleURL string `json:"live_log_console_url"` // the SQL console that second pass opens
 	// MCP servers / tools Claude may use besides Read, Grep, Glob (comma separated), and

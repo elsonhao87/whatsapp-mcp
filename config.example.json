@@ -9,5 +9,6 @@
   "live_log_console_url": "",
   "code_change_on_go": false,
   "code_branch_prefix": "",
-  "code_push_url": ""
+  "code_push_url": "",
+  "code_staging_branch": ""
 }

@@ -49,6 +49,7 @@ type proposal struct {
 	senderJID                     types.JID
 	transcript                    string
 	at                            time.Time
+	cherryPick                    string // set = this is the second step: put this commit on code_staging_branch
 }
 
 var (
@@ -143,7 +144,19 @@ func applyChange(client *whatsmeow.Client, store *MessageStore, chatJID string) 
 	triageMu.Lock()
 	defer triageMu.Unlock()
 
-	reply, detail, err := changeAndPush(loadConfig(), p)
+	cfg := loadConfig()
+	if p.cherryPick != "" {
+		detail, err := pickToStaging(cfg, p)
+		if err != nil {
+			tellOwner(client, header+"\n\n⚠️ 没有推到 "+cfg.CodeStagingBranch+":"+err.Error())
+			return
+		}
+		say(cfg.CodeStagingBranch + " ✅ " + p.cherryPick[:10])
+		tellOwner(client, header+"\n\n已 cherry-pick 到 "+cfg.CodeStagingBranch+":\n"+detail)
+		return
+	}
+
+	reply, detail, sha, err := changeAndPush(cfg, p)
 	if err != nil {
 		tellOwner(client, header+"\n\n⚠️ 没改成,什么都没有 push:"+err.Error()+"\n\n"+detail)
 		say("改动没做成,Elson 会自己看。")
@@ -153,27 +166,76 @@ func applyChange(client *whatsmeow.Client, store *MessageStore, chatJID string) 
 		reply = "改好了,已经 push 到 " + p.branch + "。"
 	}
 	say(reply)
+	if cfg.CodeStagingBranch != "" {
+		askStaging(client, cfg, p, sha)
+	}
 	now := time.Now()
 	store.StoreMessage(fmt.Sprintf("bot-%d", now.UnixNano()), p.chatJID, client.Store.ID.User, "", reply,
 		now, true, false, "", "", "", nil, nil, nil, 0)
 	tellOwner(client, header+"\n\n"+detail+"\n\n✅ 已回复群:\n"+reply)
 }
 
-// changeAndPush returns the reply for the chat and a report for the owner.
-func changeAndPush(cfg config, p *proposal) (reply, detail string, err error) {
-	if !cfg.CodeChangeOnGo {
-		return "", "", fmt.Errorf("code_change_on_go 已关闭")
+// askStaging asks the owner, in the chat, whether the commit that was just pushed
+// should also go onto code_staging_branch. Their next "go" there does it.
+func askStaging(client *whatsmeow.Client, cfg config, p *proposal, sha string) {
+	next := *p
+	next.cherryPick, next.at = sha, time.Now()
+	proposalsMu.Lock()
+	proposals[p.chatJID] = &next
+	proposalsMu.Unlock()
+	owner := ownerJID(client)
+	sendWhatsAppMessage(client, p.chatJID, fmt.Sprintf("%s@%s %s 的 %s 要不要也 cherry-pick 到 %s?回 go 我就推;不回就不动。",
+		replyPrefix, owner.User, p.repo, sha[:10], cfg.CodeStagingBranch), "", owner.String())
+}
+
+// pickToStaging cherry-picks the approved commit onto code_staging_branch and pushes it.
+func pickToStaging(cfg config, p *proposal) (string, error) {
+	if !cfg.CodeChangeOnGo || cfg.CodeStagingBranch == "" || cfg.CodePushURL == "" {
+		return "", fmt.Errorf("config.json 没开 code_change_on_go / code_staging_branch")
 	}
 	repo, err := repoDir(cfg, p.repo)
 	if err != nil {
-		return "", "", err
+		return "", err
+	}
+	url := strings.ReplaceAll(cfg.CodePushURL, "{repo}", p.repo)
+	// make sure the commit is here, then start from the staging branch as it is on the server
+	if _, err := git(repo, "fetch", "-q", url, "refs/heads/"+p.branch); err != nil {
+		return "", err
+	}
+	if _, err := git(repo, "fetch", "-q", url, "refs/heads/"+cfg.CodeStagingBranch); err != nil {
+		return "", err
+	}
+	root, _ := filepath.Abs(worktreeRoot)
+	dir := filepath.Join(root, fmt.Sprintf("%s-staging-%d", p.repo, time.Now().Unix()))
+	if _, err := git(repo, "worktree", "add", "-q", "--detach", dir, "FETCH_HEAD"); err != nil {
+		return "", err
+	}
+	defer git(repo, "worktree", "remove", "--force", dir)
+	if _, err := git(dir, "cherry-pick", p.cherryPick); err != nil {
+		return "", err // conflicts are left for the owner; the worktree is thrown away
+	}
+	stat, _ := git(dir, "show", "--stat", "--format=%h %s", "HEAD")
+	if _, err := git(dir, "push", "-q", url, "HEAD:refs/heads/"+cfg.CodeStagingBranch); err != nil {
+		return "", err
+	}
+	return stat, nil
+}
+
+// changeAndPush returns the reply for the chat, a report for the owner and the pushed commit.
+func changeAndPush(cfg config, p *proposal) (reply, detail, sha string, err error) {
+	if !cfg.CodeChangeOnGo {
+		return "", "", "", fmt.Errorf("code_change_on_go 已关闭")
+	}
+	repo, err := repoDir(cfg, p.repo)
+	if err != nil {
+		return "", "", "", err
 	}
 	if err := checkBranch(cfg, p.branch); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	instructions, err := os.ReadFile(codeChangeInstructions)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	url := strings.ReplaceAll(cfg.CodePushURL, "{repo}", p.repo)
 
@@ -181,14 +243,14 @@ func changeAndPush(cfg config, p *proposal) (reply, detail string, err error) {
 	base := "分支 " + p.branch + " 的最新版"
 	if _, err := git(repo, "fetch", "-q", url, "refs/heads/"+p.branch); err != nil {
 		if _, err := git(repo, "fetch", "-q", url, "HEAD"); err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		base = "预设分支的最新版(" + p.branch + " 是新分支)"
 	}
 	root, _ := filepath.Abs(worktreeRoot)
 	dir := filepath.Join(root, fmt.Sprintf("%s-%d", p.repo, time.Now().Unix()))
 	if _, err := git(repo, "worktree", "add", "-q", "--detach", dir, "FETCH_HEAD"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer git(repo, "worktree", "remove", "--force", dir)
 
@@ -201,7 +263,7 @@ func changeAndPush(cfg config, p *proposal) (reply, detail string, err error) {
 		allowed: "Edit(/" + filepath.ToSlash(dir) + "/**)", // "//abs/path" = absolute: edits stay inside the worktree
 	})
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	report, reply, _ := strings.Cut(out, replyMarker)
 	report, reply = strings.TrimSpace(report), strings.TrimSpace(reply)
@@ -213,20 +275,21 @@ func changeAndPush(cfg config, p *proposal) (reply, detail string, err error) {
 		}
 	}
 	if status, _ := git(dir, "status", "--porcelain"); status == "" {
-		return "", report, fmt.Errorf("Claude 没有改任何档案")
+		return "", report, "", fmt.Errorf("Claude 没有改任何档案")
 	}
 	if message == "" {
-		return "", report, fmt.Errorf("Claude 没有给 commit 讯息")
+		return "", report, "", fmt.Errorf("Claude 没有给 commit 讯息")
 	}
 	if _, err := git(dir, "add", "-A"); err != nil {
-		return "", report, err
+		return "", report, "", err
 	}
 	if _, err := git(dir, "commit", "-q", "-m", message); err != nil {
-		return "", report, err
+		return "", report, "", err
 	}
 	stat, _ := git(dir, "show", "--stat", "--format=%h %s", "HEAD")
 	if _, err := git(dir, "push", "-q", url, "HEAD:refs/heads/"+p.branch); err != nil {
-		return "", report + "\n\n" + stat, err
+		return "", report + "\n\n" + stat, "", err
 	}
-	return reply, report + "\n\n已 push 到 " + p.branch + ":\n" + stat, nil
+	sha, _ = git(dir, "rev-parse", "HEAD")
+	return reply, report + "\n\n已 push 到 " + p.branch + ":\n" + stat, sha, nil
 }

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
 )
 
 const allowedChatsFile = "allowed_chats.txt"
@@ -226,7 +227,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	return true
 }
 
-func registerWebUI(client *whatsmeow.Client) {
+func registerWebUI(client *whatsmeow.Client, store *MessageStore) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -297,6 +298,58 @@ func registerWebUI(client *whatsmeow.Client) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// investigate a stored message again (e.g. one that came in before a setting was turned on)
+	http.HandleFunc("/api/triage", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ChatJID   string `json:"chat_jid"`
+			MessageID string `json:"message_id"`
+			SenderJID string `json:"sender_jid"`
+		}
+		if !readJSON(w, r, &req) {
+			return
+		}
+		sender, err := types.ParseJID(req.SenderJID)
+		var name, content string
+		if err == nil {
+			err = store.db.QueryRow(`SELECT COALESCE(NULLIF(sender_name, ''), sender), content FROM messages WHERE id = ? AND chat_jid = ? AND is_from_me = 0`,
+				req.MessageID, req.ChatJID).Scan(&name, &content)
+		}
+		if err != nil || !isAllowed(req.ChatJID) {
+			http.Error(w, "No such message in a monitored chat", http.StatusBadRequest)
+			return
+		}
+		threadsMu.Lock()
+		delete(threads, req.ChatJID+"|"+sender.User) // forget that it was already answered
+		threadsMu.Unlock()
+		go triage(client, store, req.ChatJID, groupNames(client)[req.ChatJID], req.MessageID, sender, name, content, false)
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	// ask the owner (in the chat) whether an already pushed commit should go onto the staging branch
+	http.HandleFunc("/api/staging", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ChatJID, Repo, Branch, Commit, SenderJID, SenderName string
+		}
+		if !readJSON(w, r, &req) {
+			return
+		}
+		cfg := loadConfig()
+		sender, err := types.ParseJID(req.SenderJID)
+		if err == nil {
+			_, err = repoDir(cfg, req.Repo)
+		}
+		if err == nil {
+			err = checkBranch(cfg, req.Branch)
+		}
+		if err != nil || len(req.Commit) < 10 || cfg.CodeStagingBranch == "" || !isAllowed(req.ChatJID) {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		askStaging(client, cfg, &proposal{repo: req.Repo, branch: req.Branch, chatJID: req.ChatJID,
+			chatName: groupNames(client)[req.ChatJID], senderName: req.SenderName, senderJID: sender}, req.Commit)
+		w.WriteHeader(http.StatusAccepted)
 	})
 
 	http.HandleFunc("/api/claude/code", func(w http.ResponseWriter, r *http.Request) {
